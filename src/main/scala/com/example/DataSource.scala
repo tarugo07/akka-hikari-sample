@@ -17,8 +17,6 @@ object DataSourceProtocol {
 
   case class ConnectionResult(conn: Connection)
 
-  case object UnsupportedProtocol
-
 }
 
 object DataSource {
@@ -53,7 +51,6 @@ class DataSource(hikariConfig: HikariConfig) extends Actor with ActorLogging {
       sender ! ConnectionResult(conn)
     case _ =>
       log.warning("Unsupported Protocol")
-      sender ! UnsupportedProtocol
   }
 
 }
@@ -100,7 +97,7 @@ object DataSourceSupervisor {
 
 }
 
-class IdGenerator(dataSourceSupervisor: ActorRef) extends Actor with Stash with ActorLogging {
+class IdGenerator(dataSourceSupervisor: ActorRef) extends Actor with ActorLogging {
 
   override def supervisorStrategy: SupervisorStrategy = SupervisorStrategy.stoppingStrategy
 
@@ -109,25 +106,16 @@ class IdGenerator(dataSourceSupervisor: ActorRef) extends Actor with Stash with 
   override def receive: Receive = connectionClosed
 
   private def connectionClosed: Receive = {
-    case _: IdWorkerClientProtocol.GenerateId =>
-      stash
-      context.become(waitingForConnection)
+    case IdWorkerClientProtocol.GenerateId(from: ActorRef) =>
+      context.become(waitingForConnection(from))
       dataSourceSupervisor ! DataSourceProtocol.GetConnection
     case obj: Any => log.warning("Unsupported Protocol")
   }
 
-  private def waitingForConnection: Receive = {
+  private def waitingForConnection(replyTo: ActorRef): Receive = {
     case DataSourceProtocol.ConnectionResult(conn) =>
       log.debug("Got Connection. {}", conn)
       connection = Some(conn)
-      context.become(connectionReady)
-      unstashAll
-    case _: Any => log.warning("Unsupported Protocol")
-  }
-
-  private def connectionReady: Receive = {
-    case IdWorkerClientProtocol.GenerateId(replyTo) =>
-      log.debug("Receive GenerateId Request.")
       generateId(replyTo)
       context.stop(self)
     case _: Any => log.warning("Unsupported Protocol")
