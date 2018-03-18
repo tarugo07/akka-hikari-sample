@@ -6,6 +6,7 @@ import java.util.concurrent.TimeUnit
 
 import akka.actor.SupervisorStrategy.{ Escalate, Restart }
 import akka.actor._
+import akka.pattern.BackoffSupervisor
 import com.zaxxer.hikari.{ HikariConfig, HikariDataSource }
 
 import scala.concurrent.duration._
@@ -74,14 +75,26 @@ class DataSourceSupervisor extends Actor with ActorLogging {
     config
   }
 
-  val dataSource = context.actorOf(DataSource.props(hikariConfig), DataSource.name)
+//  val dataSource = context.actorOf(DataSource.props(hikariConfig), DataSource.name)
+//
+//  override def supervisorStrategy: SupervisorStrategy =
+//    OneForOneStrategy(maxNrOfRetries = 10, withinTimeRange = 1 minute) {
+//      case _: SQLException => Restart
+//      case _: ConnectException => Restart
+//      case _: Exception => Escalate
+//    }
 
-  override def supervisorStrategy: SupervisorStrategy =
-    OneForOneStrategy(maxNrOfRetries = 10, withinTimeRange = 1 minute) {
-      case _: SQLException => Restart
-      case _: ConnectException => Restart
-      case _: Exception => Escalate
-    }
+  val strategy = OneForOneStrategy() {
+    case _: SQLException     => Restart
+    case _: ConnectException => Restart
+    case _: Exception        => Escalate
+  }
+
+  val dataSource = context.actorOf(
+    BackoffSupervisor.propsWithSupervisorStrategy(
+      DataSource.props(hikariConfig), DataSource.name, 3.seconds, 600.seconds, 0.2, strategy
+    )
+  )
 
   override def receive: Receive = {
     case msg: Any => dataSource forward msg
@@ -164,8 +177,6 @@ class IdWorkerClientForRDB extends Actor with ActorLogging {
   override def receive: Receive = {
     case msg: IdWorkerClientProtocol.GenerateId =>
       context.actorOf(IdGenerator.props(dataSourceSupervisor)) forward msg
-    case _: Any =>
-      log.warning("Unsupported Protocol")
   }
 
 }
